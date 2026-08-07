@@ -458,18 +458,6 @@ jobs:
           kubectl get hpa
 ```
 
-**Create GitHub Repository**
-
-![repo](./img/repo.JPG)
-
-![created-repo](./img/created-repo.JPG)
-
-```bash
-mkdir -p .github/workflows/
-cd .github
-cd workflows
-nano deploy.yml
-```
 
 **Demo — Scale the service:**
 
@@ -504,3 +492,32 @@ kubectl delete pod load-generator
 # Watch pods scale back down
 kubectl get pods --watch
 ```
+
+![kubernetes](./img/k8s.JPG)
+
+![pods](./img/pods.JPG)
+
+![load-generator](./img/load-generator.JPG)
+
+**Create GitHub Repository**
+
+![repo](./img/repo.JPG)
+
+![created-repo](./img/created-repo.JPG)
+
+- Initialize git and push changes:
+
+```bash
+git init
+git add .
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/bruyo/Kubernetes-Lite_Deploy_project.git
+git push -u origin main
+```
+
+![init](./img/init.JPG)
+
+![commit](./img/commit.JPG)
+
+![push](./img/push.JPG)
