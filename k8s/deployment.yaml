@@ -18,6 +18,8 @@ spec:
         prometheus.io/port: "3000"
         prometheus.io/path: "/metrics"
     spec:
+    imagePullSecrets:
+        - name: ghcr-secret
       containers:
         - name: k8s-lite-service
           image: ghcr.io/bruyo/k8s-lite-service:latest
