@@ -1,141 +1,140 @@
-
 name: K8s-Lite Deploy
 
 on:
-push:
-branches:
-- main
+  push:
+    branches:
+      - main
 
 env:
-REGISTRY: ghcr.io
-IMAGE_NAME: bruyo/k8s-lite-service
-AWS_REGION: us-west-2
-EKS_CLUSTER: my-kustomize-cluster
+  REGISTRY: ghcr.io
+  IMAGE_NAME: bruyo/k8s-lite-service
+  AWS_REGION: us-west-2
+  EKS_CLUSTER: my-kustomize-cluster
 
 jobs:
-build-and-test:
-runs-on: ubuntu-latest
+  build-and-test:
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Checkout
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  - name: Set up Node.js
-    uses: actions/setup-node@v4
-    with:
-      node-version: "20"
-      cache: "npm"
-      cache-dependency-path: app/package-lock.json
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: app/package-lock.json
 
-  - name: Install dependencies
-    working-directory: app
-    run: npm ci
+      - name: Install dependencies
+        working-directory: app
+        run: npm ci
 
-  - name: Run tests
-    working-directory: app
-    run: npm test --if-present
+      - name: Run tests
+        working-directory: app
+        run: npm test --if-present
 
-build-and-push:
-needs: build-and-test
-runs-on: ubuntu-latest
+  build-and-push:
+    needs: build-and-test
+    runs-on: ubuntu-latest
 
-permissions:
-  contents: read
-  packages: write
+    permissions:
+      contents: read
+      packages: write
 
-outputs:
-  image_tag: ${{ steps.image.outputs.tag }}
+    outputs:
+      image_tag: ${{ steps.image.outputs.tag }}
 
-steps:
-  - name: Checkout
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  - name: Log in to GHCR
-    uses: docker/login-action@v3
-    with:
-      registry: ${{ env.REGISTRY }}
-      username: ${{ github.actor }}
-      password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-  - name: Generate image tag
-    id: image
-    run: |
-      SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
-      echo "tag=sha-$SHORT_SHA" >> "$GITHUB_OUTPUT"
-      echo "Image tag: sha-$SHORT_SHA"
+      - name: Generate image tag
+        id: image
+        run: |
+          SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
+          echo "tag=sha-$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "Image tag: sha-$SHORT_SHA"
 
-  - name: Build and push image
-    uses: docker/build-push-action@v6
-    with:
-      context: ./app
-      file: ./app/Dockerfile
-      push: true
-      tags: |
-        ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}
-        ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-deploy:
-needs: build-and-push
-runs-on: ubuntu-latest
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Checkout
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  - name: Configure AWS credentials
-    uses: aws-actions/configure-aws-credentials@v4
-    with:
-      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      aws-region: ${{ env.AWS_REGION }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-  - name: Configure kubectl for EKS
-    run: |
-      aws eks update-kubeconfig \
-        --name "$EKS_CLUSTER" \
-        --region "$AWS_REGION"
+      - name: Configure kubectl for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name "$EKS_CLUSTER" \
+            --region "$AWS_REGION"
 
-      echo "EKS nodes:"
-      kubectl get nodes
+          echo "EKS nodes:"
+          kubectl get nodes
 
-  - name: Deploy Kubernetes manifests
-    run: |
-      kubectl apply -f k8s/deployment.yaml
-      kubectl apply -f k8s/service.yaml
-      kubectl apply -f k8s/hpa.yaml
+      - name: Deploy Kubernetes manifests
+        run: |
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl apply -f k8s/hpa.yaml
 
-  - name: Set image
-    run: |
-      IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+      - name: Set image
+        run: |
+          IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
 
-      echo "Deploying image:"
-      echo "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+          echo "Deploying image:"
+          echo "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
 
-      kubectl set image deployment/k8s-lite-service \
-        k8s-lite-service=${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+          kubectl set image deployment/k8s-lite-service \
+            k8s-lite-service=${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
 
-      echo "Current deployment image:"
-      kubectl get deployment k8s-lite-service \
-        -o jsonpath='{.spec.template.spec.containers[0].image}'
+          echo "Current deployment image:"
+          kubectl get deployment k8s-lite-service \
+            -o jsonpath='{.spec.template.spec.containers[0].image}'
 
-      echo
+          echo
 
-  - name: Wait for rollout
-    run: |
-      kubectl rollout status \
-        deployment/k8s-lite-service \
-        --timeout=5m
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status \
+            deployment/k8s-lite-service \
+            --timeout=5m
 
-  - name: Verify deployment
-    run: |
-      echo "=== Deployment ==="
-      kubectl get deployment k8s-lite-service
+      - name: Verify deployment
+        run: |
+          echo "=== Deployment ==="
+          kubectl get deployment k8s-lite-service
 
-      echo "=== Pods ==="
-      kubectl get pods -l app=k8s-lite-service -o wide
+          echo "=== Pods ==="
+          kubectl get pods -l app=k8s-lite-service -o wide
 
-      echo "=== Services ==="
-      kubectl get services
+          echo "=== Services ==="
+          kubectl get services
 
-      echo "=== HPA ==="
-      kubectl get hpa
+          echo "=== HPA ==="
+          kubectl get hpa
