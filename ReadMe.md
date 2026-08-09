@@ -138,6 +138,12 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
 CMD ["node", "app.js"]
 ```
 
+Also note that we have to add a lock file 'package-lock.json' by running the code;
+
+```bash
+npm install
+```
+
 **Kubernetes Manifests**
 
 - Create k8s/deployment.yaml:
@@ -169,9 +175,11 @@ spec:
         prometheus.io/port: "3000"
         prometheus.io/path: "/metrics"
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
         - name: k8s-lite-service
-          image: ghcr.io/YOUR_USERNAME/k8s-lite-service:latest
+          image: ghcr.io/bruyo/k8s-lite-service:latest
           ports:
             - containerPort: 3000
           env:
@@ -458,6 +466,238 @@ jobs:
           kubectl get hpa
 ```
 
+**Create GitHub Repository**
+
+![repo](./img/repo.JPG)
+
+![created-repo](./img/created-repo.JPG)
+
+- Initialize git and push changes:
+
+```bash
+git init
+git add .
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/bruyo/Kubernetes-Lite_Deploy_project.git
+git push -u origin main
+```
+
+![init](./img/init.JPG)
+
+![commit](./img/commit.JPG)
+
+![push](./img/push.JPG)
+
+
+**Create the EKS Cluster using terraform:**
+
+- On the project directory, create a new directory 'terraform'.
+
+```bash
+mkdir terraform
+cd terraform
+nano provider.tf
+nano eks.tf
+nano variables.tf
+nano outputs.tf
+nano vpc.tf
+```
+- terraform/provider.tf
+
+```bash
+terraform {
+  required_version = ">= 1.5"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.0"
+    }
+  }
+
+  # Local state by default. For team use, switch to an S3 backend:
+  # backend "s3" {
+  #   bucket = "your-tfstate-bucket"
+  #   key    = "k8s-lite-deploy/terraform.tfstate"
+  #   region = "us-west-2"
+  # }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = module.eks.cluster_endpoint
+    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.aws_region]
+    }
+  }
+}
+```
+
+- terraform/eks.tf
+
+```bash
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 20.0"
+
+  cluster_name    = var.cluster_name
+  cluster_version = var.cluster_version
+
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
+
+  cluster_endpoint_public_access = true
+
+  eks_managed_node_groups = {
+    default = {
+      instance_types = [var.node_instance_type]
+      desired_size   = var.node_desired_size
+      min_size       = var.node_min_size
+      max_size       = var.node_max_size
+    }
+  }
+
+  # Grants the IAM identity running `terraform apply` cluster-admin access.
+  # This is also what CI needs — AWS_ACCESS_KEY_ID/SECRET must belong to
+  # this same IAM user/role (or be added via access_entries below).
+  enable_cluster_creator_admin_permissions = true
+}
+
+# --- metrics-server, addressed in the last chat: fixes the HPA <unknown> targets ---
+resource "helm_release" "metrics_server" {
+  name       = "metrics-server"
+  repository = "https://kubernetes-sigs.github.io/metrics-server/"
+  chart      = "metrics-server"
+  namespace  = "kube-system"
+  version    = "3.12.1"
+
+  depends_on = [module.eks]
+}
+```
+
+- terraform/vpc.tf
+
+```bash
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0"
+
+  name = "${var.cluster_name}-vpc"
+  cidr = "10.0.0.0/16"
+
+  azs             = slice(data.aws_availability_zones.available.names, 0, 2)
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
+
+  enable_nat_gateway   = true
+  single_nat_gateway   = true
+  enable_dns_hostnames = true
+
+  # Required tags for the EKS/ALB controller to auto-discover subnets
+  public_subnet_tags = {
+    "kubernetes.io/role/elb"                     = "1"
+    "kubernetes.io/cluster/${var.cluster_name}"  = "shared"
+  }
+  private_subnet_tags = {
+    "kubernetes.io/role/internal-elb"            = "1"
+    "kubernetes.io/cluster/${var.cluster_name}"  = "shared"
+  }
+}
+```
+
+- terraform/variables.tf
+
+```bash
+variable "aws_region" {
+  description = "AWS region to deploy into"
+  type        = string
+  default     = "us-west-2"
+}
+
+variable "cluster_name" {
+  description = "EKS cluster name — must match the name used in .github/workflows/deploy.yml"
+  type        = string
+  default     = "my-kustomize-cluster"
+}
+
+variable "cluster_version" {
+  description = "Kubernetes version"
+  type        = string
+  default     = "1.31"
+}
+
+variable "node_instance_type" {
+  description = "EC2 instance type for worker nodes"
+  type        = string
+  default     = "t3.medium"
+}
+
+variable "node_desired_size" {
+  type    = number
+  default = 2
+}
+
+variable "node_min_size" {
+  type    = number
+  default = 1
+}
+
+variable "node_max_size" {
+  type    = number
+  default = 3
+}
+```
+
+- terraform/outputs.tf
+
+```bash
+output "cluster_name" {
+  value = module.eks.cluster_name
+}
+
+output "cluster_endpoint" {
+  value = module.eks.cluster_endpoint
+}
+
+output "region" {
+  value = var.aws_region
+}
+
+output "configure_kubectl" {
+  value = "aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.aws_region}"
+}
+```
+
+```bash
+cd terraform/
+terraform init
+terraform plan
+terraform apply
+```
+
+![init](./img/terraform-init.JPG)
+
+![terraform-plan](./img/plan.JPG)
+
+![apply](./img/apply.JPG)
+
+![rollback](.)
 
 **Demo — Scale the service:**
 
@@ -499,25 +739,3 @@ kubectl get pods --watch
 
 ![load-generator](./img/load-generator.JPG)
 
-**Create GitHub Repository**
-
-![repo](./img/repo.JPG)
-
-![created-repo](./img/created-repo.JPG)
-
-- Initialize git and push changes:
-
-```bash
-git init
-git add .
-git commit -m "first commit"
-git branch -M main
-git remote add origin https://github.com/bruyo/Kubernetes-Lite_Deploy_project.git
-git push -u origin main
-```
-
-![init](./img/init.JPG)
-
-![commit](./img/commit.JPG)
-
-![push](./img/push.JPG)
